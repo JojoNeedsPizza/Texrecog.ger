@@ -11,7 +11,7 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 class VideoOCRApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Video Text Extraktor (OCR)")
+        self.root.title("Video Text Extraktor (Optimiertes OCR)")
         self.root.geometry("650x550")
         self.root.minsize(500, 400)
 
@@ -42,7 +42,7 @@ class VideoOCRApp:
         self.progress_label.pack(side=tk.LEFT, padx=10)
 
         # --- Vorschau-Bereich (Preview) ---
-        preview_frame = tk.LabelFrame(self.root, text="Vorschau des erkannten Textes (Duplikate gefiltert)", padx=10, pady=10)
+        preview_frame = tk.LabelFrame(self.root, text="Vorschau des erkannten Textes (Hohe Genauigkeit)", padx=10, pady=10)
         preview_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         self.txt_preview = scrolledtext.ScrolledText(preview_frame, wrap=tk.WORD, font=("Courier New", 10))
@@ -70,14 +70,19 @@ class VideoOCRApp:
         self.btn_select.config(state=tk.DISABLED)
         threading.Thread(target=self.process_video, daemon=True).start()
 
-    def is_duplicate(self, new_line, existing_lines, threshold=0.7):
-        """Überprüft, ob eine Zeile einer bereits erkannten Zeile zu ähnlich ist."""
+    def is_duplicate(self, new_line, existing_lines, threshold=0.65):
+        """Überprüft die Ähnlichkeit. Leicht gesenkt, um minimale OCR-Variationen besser abzufangen."""
         for existing_line in existing_lines:
-            # Berechnet die Ähnlichkeit zwischen 0.0 (völlig anders) und 1.0 (identisch)
             similarity = SequenceMatcher(None, new_line.lower(), existing_line.lower()).ratio()
             if similarity >= threshold:
                 return True
         return False
+
+    def clean_ocr_text(self, text):
+        """Entfernt typischen OCR-Müll (Sonderzeichen-Fragmente)."""
+        allowed_chars = "abcdefghijklmnopqrstuvwxyzäöüßABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789.,!?-+/():; "
+        cleaned = "".join([c for c in text if c in allowed_chars])
+        return cleaned.strip()
 
     def process_video(self):
         cap = cv2.VideoCapture(self.video_path)
@@ -89,11 +94,15 @@ class VideoOCRApp:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         
-        # Analysiere alle 1 Sekunde ein Frame für flüssige Performance
+        # Jede Sekunde ein Frame analysieren
         frame_interval = max(1, int(fps)) 
         
         unique_text_list = []
         frame_count = 0
+
+        # Tesseract-Konfiguration: PSM 6 geht von einem einzelnen homogenen Textblock aus
+        # Das verbessert das Erkennen von Sätzen im Vergleich zum Standard-Modus drastisch
+        tesseract_config = r'--psm 6'
 
         while cap.isOpened():
             ret, frame = cap.read()
@@ -104,30 +113,36 @@ class VideoOCRApp:
                 percent = int((frame_count / total_frames) * 100)
                 self.progress_label.config(text=f"Verarbeite... {percent}%")
                 
-                # Vorverarbeitung (Graustufen)
+                # --- BILD-VORVERARBEITUNG FÜR BESSERES OCR ---
+                # 1. In Graustufen umwandeln
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 
+                # 2. Hochskalieren (Faktor 2), damit kleinere Schriftzüge schärfer für die Engine werden
+                gray_resized = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+                
+                # 3. Otsu-Binarisierung: Berechnet automatisch den besten Schwellenwert,
+                # um harten Schwarz-Weiß-Kontrast zu erzeugen (entfernt Grauschleier/Schatten)
+                _, thresh = cv2.threshold(gray_resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                
+                # OCR ausführen mit optimierter Konfiguration
                 try:
-                    text = pytesseract.image_to_string(gray, lang="deu+eng")
+                    text = pytesseract.image_to_string(thresh, lang="deu+eng", config=tesseract_config)
                 except pytesseract.TesseractError:
-                    text = pytesseract.image_to_string(gray, lang="eng")
+                    text = pytesseract.image_to_string(thresh, lang="eng", config=tesseract_config)
 
-                # Text zeilenweise verarbeiten
+                # Zeilen verarbeiten
                 for line in text.split("\n"):
-                    cleaned_line = line.strip()
+                    cleaned_line = self.clean_ocr_text(line)
                     
-                    # Nur Zeilen mit Inhalt betrachten (länger als 3 Zeichen)
+                    # Nur sinnvolle Zeilen nehmen (länger als 3 Zeichen)
                     if len(cleaned_line) > 3:
-                        # Schwellenwert 0.7 bedeutet: Wenn die Zeile zu 70% mit einer alten übereinstimmt,
-                        # wird sie ignoriert (schützt vor doppelten Untertiteln/Sätzen)
-                        if not self.is_duplicate(cleaned_line, unique_text_list, threshold=0.7):
+                        if not self.is_duplicate(cleaned_line, unique_text_list, threshold=0.65):
                             unique_text_list.append(cleaned_line)
 
             frame_count += 1
 
         cap.release()
         
-        # Text für die Vorschau zusammenbauen
         self.extracted_text = "\n".join(unique_text_list)
         
         # GUI aktualisieren

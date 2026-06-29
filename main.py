@@ -44,7 +44,7 @@ class VideoOCRApp:
 
         # --- Vorschau-Bereich (Preview) ---
         preview_frame = tk.LabelFrame(self.root, text="Vorschau des erkannten Textes", padx=10, pady=10)
-        preview_frame.pack(fill=tk.BOTH, expand=True, padx=10, tbody=10)
+        preview_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         self.txt_preview = scrolledtext.ScrolledText(preview_frame, wrap=tk.WORD, font=("Courier New", 10))
         self.txt_preview.pack(fill=tk.BOTH, expand=True)

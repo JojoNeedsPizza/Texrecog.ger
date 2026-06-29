@@ -3,10 +3,9 @@ import pytesseract
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 import threading
-from PIL import Image
+from difflib import SequenceMatcher
 
-# HINWEIS FÜR WINDOWS-NUTZER:
-# Wenn Tesseract nicht im PATH ist, entferne das '#' am Anfang der nächsten Zeile und passe den Pfad an:
+# Aktivierte Zeile für Windows:
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 class VideoOCRApp:
@@ -43,7 +42,7 @@ class VideoOCRApp:
         self.progress_label.pack(side=tk.LEFT, padx=10)
 
         # --- Vorschau-Bereich (Preview) ---
-        preview_frame = tk.LabelFrame(self.root, text="Vorschau des erkannten Textes", padx=10, pady=10)
+        preview_frame = tk.LabelFrame(self.root, text="Vorschau des erkannten Textes (Duplikate gefiltert)", padx=10, pady=10)
         preview_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         self.txt_preview = scrolledtext.ScrolledText(preview_frame, wrap=tk.WORD, font=("Courier New", 10))
@@ -67,10 +66,18 @@ class VideoOCRApp:
             self.txt_preview.delete("1.0", tk.END)
 
     def start_ocr_thread(self):
-        # Threading verhindert, dass die GUI während der Verarbeitung einfriert
         self.btn_start.config(state=tk.DISABLED)
         self.btn_select.config(state=tk.DISABLED)
         threading.Thread(target=self.process_video, daemon=True).start()
+
+    def is_duplicate(self, new_line, existing_lines, threshold=0.7):
+        """Überprüft, ob eine Zeile einer bereits erkannten Zeile zu ähnlich ist."""
+        for existing_line in existing_lines:
+            # Berechnet die Ähnlichkeit zwischen 0.0 (völlig anders) und 1.0 (identisch)
+            similarity = SequenceMatcher(None, new_line.lower(), existing_line.lower()).ratio()
+            if similarity >= threshold:
+                return True
+        return False
 
     def process_video(self):
         cap = cv2.VideoCapture(self.video_path)
@@ -82,11 +89,9 @@ class VideoOCRApp:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         
-        # Um die Performance zu verbessern, analysieren wir standardmäßig z. B. alle 1 Sekunde (alle 'fps' Frames)
-        # Wenn du eine präzisere Erkennung willst, verringere das Frame-Intervall (z.B. alle 0.5 Sekunden)
+        # Analysiere alle 1 Sekunde ein Frame für flüssige Performance
         frame_interval = max(1, int(fps)) 
         
-        seen_lines = set()
         unique_text_list = []
         frame_count = 0
 
@@ -96,37 +101,36 @@ class VideoOCRApp:
                 break
 
             if frame_count % frame_interval == 0:
-                # GUI-Fortschritt aktualisieren
                 percent = int((frame_count / total_frames) * 100)
                 self.progress_label.config(text=f"Verarbeite... {percent}%")
                 
-                # Vorverarbeitung für besseres OCR (Graustufen)
+                # Vorverarbeitung (Graustufen)
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 
-                # OCR ausführen (Sprachauswahl standardmäßig Englisch + Deutsch mit 'eng+deu')
-                # Falls 'deu' Fehler wirft, lade die deutsche Tesseract-Datei herunter oder nutze nur 'eng'
                 try:
                     text = pytesseract.image_to_string(gray, lang="deu+eng")
                 except pytesseract.TesseractError:
-                    # Fallback auf Standard (Englisch), falls Deutsch nicht installiert ist
                     text = pytesseract.image_to_string(gray, lang="eng")
 
-                # Text säubern und Duplikate filtern
+                # Text zeilenweise verarbeiten
                 for line in text.split("\n"):
                     cleaned_line = line.strip()
-                    # Ignoriere zu kurze Fragmente oder bereits erkannte Zeilen
-                    if len(cleaned_line) > 3 and cleaned_line not in seen_lines:
-                        seen_lines.add(cleaned_line)
-                        unique_text_list.append(cleaned_line)
+                    
+                    # Nur Zeilen mit Inhalt betrachten (länger als 3 Zeichen)
+                    if len(cleaned_line) > 3:
+                        # Schwellenwert 0.7 bedeutet: Wenn die Zeile zu 70% mit einer alten übereinstimmt,
+                        # wird sie ignoriert (schützt vor doppelten Untertiteln/Sätzen)
+                        if not self.is_duplicate(cleaned_line, unique_text_list, threshold=0.7):
+                            unique_text_list.append(cleaned_line)
 
             frame_count += 1
 
         cap.release()
         
-        # Ergebnis zusammenführen
+        # Text für die Vorschau zusammenbauen
         self.extracted_text = "\n".join(unique_text_list)
         
-        # GUI nach Verarbeitung aktualisieren
+        # GUI aktualisieren
         self.progress_label.config(text="Fertig!")
         self.txt_preview.delete("1.0", tk.END)
         self.txt_preview.insert(tk.END, self.extracted_text)
@@ -148,7 +152,6 @@ class VideoOCRApp:
         if save_path:
             try:
                 with open(save_path, "w", encoding="utf-8") as f:
-                    # Liest den aktuellen Inhalt aus dem Vorschaufeld (falls der User noch etwas editiert hat)
                     current_text = self.txt_preview.get("1.0", tk.END).strip()
                     f.write(current_text)
                 messagebox.showinfo("Erfolgreich", "Datei wurde erfolgreich gespeichert!")

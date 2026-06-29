@@ -7,7 +7,7 @@ from PIL import Image
 
 # HINWEIS FÜR WINDOWS-NUTZER:
 # Wenn Tesseract nicht im PATH ist, entferne das '#' am Anfang der nächsten Zeile und passe den Pfad an:
-# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 class VideoOCRApp:
     def __init__(self, root):
